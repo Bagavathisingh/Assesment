@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neo4j CSV Upload</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+*{
+margin:0;
+padding:0;
+box-sizing:border-box;
+font-family:'Inter',sans-serif;
+}
+
+body{
+background:#f8fafc;
+padding:40px;
+}
+
+.container{
+max-width:1200px;
+margin:auto;
+}
+
+.card{
+background:#fff;
+padding:30px;
+border-radius:15px;
+box-shadow:0 10px 25px rgba(0,0,0,.08);
+}
+
+input[type=file]{
+margin:20px 0;
+}
+
+button{
+padding:12px 25px;
+background:#2563eb;
+color:#fff;
+border:none;
+border-radius:8px;
+cursor:pointer;
+font-size:14px;
+}
+
+button:hover:not(:disabled){
+background:#1d4ed8;
+}
+
+button:disabled{
+background:#93c5fd;
+cursor:not-allowed;
+}
+
+.progress-wrap{
+margin-top:20px;
+display:none;
+}
+
+.progress-wrap.active{
+display:block;
+}
+
+.progress-bar-bg{
+width:100%;
+height:10px;
+background:#e5e7eb;
+border-radius:6px;
+overflow:hidden;
+}
+
+.progress-bar-fill{
+height:100%;
+width:0%;
+background:#2563eb;
+transition:width .15s ease;
+}
+
+.progress-label{
+margin-top:8px;
+font-size:13px;
+color:#475569;
+}
+
+.message{
+margin-top:20px;
+font-weight:600;
+}
+
+.message.error{
+color:#dc2626;
+}
+
+.message.success{
+color:#16a34a;
+}
+
+table{
+width:100%;
+border-collapse:collapse;
+margin-top:20px;
+font-size:14px;
+}
+
+th,td{
+border:1px solid #ddd;
+padding:10px 12px;
+text-align:left;
+}
+
+thead{
+background:#2563eb;
+color:white;
+position:sticky;
+top:0;
+}
+
+.table-scroll{
+max-height:500px;
+overflow:auto;
+border:1px solid #eee;
+border-radius:8px;
+margin-top:20px;
+}
+
+.table-footer{
+display:flex;
+align-items:center;
+justify-content:space-between;
+margin-top:14px;
+font-size:13px;
+color:#475569;
+}
+
+.table-footer button{
+padding:6px 14px;
+font-size:13px;
+}
+
+.row-count{
+margin-top:10px;
+font-size:13px;
+color:#64748b;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="card">
+
+<h2>Upload CSV to Neo4j</h2>
+
+<input
+type="file"
+id="csvFile"
+accept=".csv">
+
+<br>
+
+<button id="uploadBtn" onclick="uploadCSV()">
+Upload
+</button>
+
+<div class="progress-wrap" id="progressWrap">
+<div class="progress-bar-bg">
+<div class="progress-bar-fill" id="progressFill"></div>
+</div>
+<div class="progress-label" id="progressLabel">Uploading… 0%</div>
+</div>
+
+<div class="message" id="message"></div>
+
+</div>
+
+<div class="card" style="margin-top:30px;">
+
+<h2>Stored Data</h2>
+
+<button onclick="loadData()">Refresh</button>
+
+<div class="row-count" id="rowCount"></div>
+
+<div class="table-scroll">
+<table id="table"></table>
+</div>
+
+<div class="table-footer" id="tableFooter" style="display:none;">
+<span id="pageLabel"></span>
+<span>
+<button onclick="prevPage()" id="prevBtn">Prev</button>
+<button onclick="nextPage()" id="nextBtn">Next</button>
+</span>
+</div>
+
+</div>
+</div>
+
+<script>
+
+const API_BASE = "http://localhost:8080";
+const PAGE_SIZE = 100;
+
+let allRows = [];
+let currentPage = 0;
+
+function escapeHtml(str){
+if(str===null || str===undefined) return "";
+return String(str)
+.replaceAll("&","&amp;")
+.replaceAll("<","&lt;")
+.replaceAll(">","&gt;")
+.replaceAll('"',"&quot;")
+.replaceAll("'","&#039;");
+}
+
+function setMessage(text, type){
+const el = document.getElementById("message");
+el.textContent = text;
+el.className = "message" + (type ? " " + type : "");
+}
+
+function uploadCSV(){
+
+const fileInput = document.getElementById("csvFile");
+const file = fileInput.files[0];
+
+if(!file){
+alert("Choose a CSV file");
+return;
+}
+
+const uploadBtn = document.getElementById("uploadBtn");
+const progressWrap = document.getElementById("progressWrap");
+const progressFill = document.getElementById("progressFill");
+const progressLabel = document.getElementById("progressLabel");
+
+uploadBtn.disabled = true;
+progressWrap.classList.add("active");
+progressFill.style.width = "0%";
+progressLabel.textContent = "Uploading… 0%";
+setMessage("");
+
+const formData = new FormData();
+formData.append("file", file);
+
+// XHR (not fetch) because fetch has no native upload progress event
+const xhr = new XMLHttpRequest();
+xhr.open("POST", `${API_BASE}/api/csv/upload`);
+
+xhr.upload.onprogress = (e) => {
+if(e.lengthComputable){
+const pct = Math.round((e.loaded / e.total) * 100);
+progressFill.style.width = pct + "%";
+progressLabel.textContent = `Uploading… ${pct}%`;
+}
+};
+
+xhr.onload = () => {
+uploadBtn.disabled = false;
+progressWrap.classList.remove("active");
+
+if(xhr.status >= 200 && xhr.status < 300){
+setMessage(xhr.responseText || "Upload complete", "success");
+loadData();
+} else {
+setMessage(`Upload failed (${xhr.status}): ${xhr.responseText}`, "error");
+}
+};
+
+xhr.onerror = () => {
+uploadBtn.disabled = false;
+progressWrap.classList.remove("active");
+setMessage("Upload failed — network error or server unreachable.", "error");
+};
+
+progressLabel.textContent = "Uploading…";
+xhr.send(formData);
+}
+
+async function loadData(){
+
+setMessage("");
+const rowCountEl = document.getElementById("rowCount");
+rowCountEl.textContent = "Loading…";
+
+try{
+const response = await fetch(`${API_BASE}/api/csv/data`);
+
+if(!response.ok){
+throw new Error(`Server returned ${response.status}`);
+}
+
+const data = await response.json();
+allRows = Array.isArray(data) ? data : [];
+currentPage = 0;
+renderPage();
+
+}catch(err){
+rowCountEl.textContent = "";
+setMessage(`Failed to load data: ${err.message}`, "error");
+document.getElementById("table").innerHTML = "";
+document.getElementById("tableFooter").style.display = "none";
+}
+}
+
+function renderPage(){
+
+const table = document.getElementById("table");
+const rowCountEl = document.getElementById("rowCount");
+const footer = document.getElementById("tableFooter");
+
+if(allRows.length === 0){
+table.innerHTML = "<tr><td>No data</td></tr>";
+rowCountEl.textContent = "";
+footer.style.display = "none";
+return;
+}
+
+rowCountEl.textContent = `${allRows.length} rows total`;
+
+const headers = Object.keys(allRows[0]);
+const start = currentPage * PAGE_SIZE;
+const end = Math.min(start + PAGE_SIZE, allRows.length);
+const pageRows = allRows.slice(start, end);
+
+let html = "<thead><tr>";
+headers.forEach(h => {
+html += `<th>${escapeHtml(h)}</th>`;
+});
+html += "</tr></thead><tbody>";
+
+pageRows.forEach(row => {
+html += "<tr>";
+headers.forEach(h => {
+html += `<td>${escapeHtml(row[h])}</td>`;
+});
+html += "</tr>";
+});
+
+html += "</tbody>";
+table.innerHTML = html;
+
+const totalPages = Math.ceil(allRows.length / PAGE_SIZE);
+document.getElementById("pageLabel").textContent =
+`Page ${currentPage + 1} of ${totalPages} (rows ${start + 1}-${end})`;
+
+document.getElementById("prevBtn").disabled = currentPage === 0;
+document.getElementById("nextBtn").disabled = currentPage >= totalPages - 1;
+
+footer.style.display = allRows.length > PAGE_SIZE ? "flex" : "none";
+}
+
+function nextPage(){
+const totalPages = Math.ceil(allRows.length / PAGE_SIZE);
+if(currentPage < totalPages - 1){
+currentPage++;
+renderPage();
+}
+}
+
+function prevPage(){
+if(currentPage > 0){
+currentPage--;
+renderPage();
+}
+}
+
+</script>
+
+</body>
+</html>
